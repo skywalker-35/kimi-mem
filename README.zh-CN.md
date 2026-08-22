@@ -156,15 +156,4 @@ cd web && bun install && bun run build   # Web UI 产物输出到 ../dist/web
 - 存储引擎、向量检索、Web UI、画像管理来自 [tickernelz/opencode-mem](https://github.com/tickernelz/opencode-mem)（MIT），以 vendor 形式内嵌在 `daemon/opencode-mem/`，补丁清单见 `daemon/opencode-mem/PATCHES.md`
 - 本项目自身代码以 [MIT](./LICENSE) 发布
 
-开发过程中的踩坑记录（给维护者看的）：[docs/dev-notes.md](./docs/dev-notes.md)
-
-## 发布流程（维护者）
-
-版本号遵循语义化版本（semver），同时写在 `plugin/package.json` 和 `plugin/kimi.plugin.json`（两者必须一致）：
-
-```bash
-pwsh scripts/bump-version.ps1 patch   # 修 bug：0.1.0 → 0.1.1（还有 minor / major）
-git push origin main --follow-tags    # 推送后 CI 自动打包 zip 并发 GitHub Release
-```
-
-Release 里会挂两个 zip：`kimi-mem-vX.Y.Z.zip`（存档用）和 `kimi-mem.zip`（固定文件名，README 的 `releases/latest/download/kimi-mem.zip` 安装链接永远指向最新版）。
+开发过程中的踩坑记录（给维护者看的）：[docs/dev-notes.md](./docs/dev-notes.md)；发布流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)

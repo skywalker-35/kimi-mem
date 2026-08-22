@@ -157,18 +157,7 @@ If you already use OpenCode with opencode-mem:
 - Storage engine, vector search, Web UI, and profile management come from [tickernelz/opencode-mem](https://github.com/tickernelz/opencode-mem) (MIT), vendored in `daemon/opencode-mem/` — patch list: `daemon/opencode-mem/PATCHES.md`
 - kimi-mem's own code is released under [MIT](./LICENSE)
 
-Development notes & pitfalls (for maintainers): [docs/dev-notes.md](./docs/dev-notes.md)
-
-## Releasing (maintainers)
-
-Versions follow semver and live in both `plugin/package.json` and `plugin/kimi.plugin.json` (must stay in sync):
-
-```bash
-pwsh scripts/bump-version.ps1 patch   # bugfix: 0.1.0 → 0.1.1 (also: minor / major)
-git push origin main --follow-tags    # pushing the tag triggers CI to pack the zip and publish a Release
-```
-
-Each Release carries two zips: `kimi-mem-vX.Y.Z.zip` (archival) and `kimi-mem.zip` (stable filename — the README install link `releases/latest/download/kimi-mem.zip` always points to the latest release).
+Development notes & pitfalls (for maintainers): [docs/dev-notes.md](./docs/dev-notes.md) · Release process: [CONTRIBUTING.md](./CONTRIBUTING.md)
 
 ---
 
