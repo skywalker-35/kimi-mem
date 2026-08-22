@@ -1,0 +1,47 @@
+{
+  "name": "kimi-mem",
+  "version": "0.1.0",
+  "description": "Persistent project memory for Kimi Code，基于 opencode-mem 的本地向量存储",
+  "license": "MIT",
+  "author": "skywalker-35",
+  "homepage": "https://github.com/skywalker-35/kimi-mem",
+  "keywords": [
+    "kimi-code",
+    "persistent-memory",
+    "ai-agent-memory",
+    "opencode-mem",
+    "vector-search",
+    "mcp-server",
+    "user-profile",
+    "local-first"
+  ],
+  "skills": "./skills/",
+  "systemPromptPath": "./SYSTEM.md",
+  "mcpServers": {
+    "kimi-mem": {
+      "command": "node",
+      "args": ["./mcp-server.mjs"]
+    }
+  },
+  "hooks": [
+    {
+      "event": "UserPromptSubmit",
+      "command": "node ./hooks/inject.mjs",
+      "timeout": 30
+    },
+    {
+      "event": "Stop",
+      "command": "node ./hooks/capture.mjs",
+      "timeout": 10
+    },
+    {
+      "event": "SessionEnd",
+      "command": "node ./hooks/capture.mjs",
+      "timeout": 10
+    }
+  ],
+  "interface": {
+    "displayName": "Kimi Mem",
+    "shortDescription": "跨会话持久项目记忆（自动捕获 + 自动注入 + Web UI）"
+  }
+}

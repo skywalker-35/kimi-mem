@@ -1,0 +1,18 @@
+# 依赖与构建产物（用户克隆后自行 bun install / bun x tsc 生成）
+node_modules/
+daemon/opencode-mem/dist/
+daemon/opencode-mem/web/node_modules/
+daemon/opencode-mem/web/dist/
+
+# 本地运行状态与日志
+*.log
+.kimi-mem/
+
+# 系统/编辑器杂项
+.DS_Store
+Thumbs.db
+*.local
+
+# 打包产物
+.pack-staging/
+release/

@@ -1,0 +1,25 @@
+{
+  "name": "kimi-mem",
+  "version": "0.1.0",
+  "description": "Persistent project memory for Kimi Code，基于 opencode-mem 的本地向量存储",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "kimi-code",
+    "kimi-code-plugin",
+    "persistent-memory",
+    "ai-agent-memory",
+    "opencode-mem",
+    "vector-search",
+    "mcp-server",
+    "user-profile",
+    "local-first"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skywalker-35/kimi-mem.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
