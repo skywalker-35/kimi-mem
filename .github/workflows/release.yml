@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  pack:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Pack release zip
+        shell: pwsh
+        run: |
+          $v = ${env:GITHUB_REF_NAME} -replace '^v', ''
+          pwsh scripts/pack-release.ps1 -Version $v
+
+      - name: Upload to GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = Get-ChildItem release/kimi-mem-v*.zip | Select-Object -First 1
+          # 复制一份固定文件名，README 的 releases/latest/download/kimi-mem.zip 链接永远有效
+          Copy-Item $zip.FullName "release/kimi-mem.zip"
+          gh release create ${env:GITHUB_REF_NAME} $zip.FullName release/kimi-mem.zip --title "kimi-mem ${env:GITHUB_REF_NAME}" --generate-notes
