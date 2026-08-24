@@ -34,7 +34,7 @@ pwsh scripts/pack-release.ps1            # 本地打包，产物在 release/
 gh release create vX.Y.Z release/kimi-mem-vX.Y.Z.zip release/kimi-mem.zip
 ```
 
-Commit message 写清楚就相当于在写 changelog——Release notes 由 CI 的 `--generate-notes` 从 commit 提取。
+Commit message 写清楚就相当于在写 changelog——但注意 CI 的 `--generate-notes` 在没有 PR 时只生成一行对比链接，**Release 发布后必须用 `gh release edit vX.Y.Z --notes-file <说明文件>` 手动补写中文更新说明**（功能用法、特性、升级方式）。
 
 ## 升级上游 opencode-mem
 
