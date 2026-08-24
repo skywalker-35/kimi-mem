@@ -16,6 +16,7 @@
     "local-first"
   ],
   "skills": "./skills/",
+  "commands": "./commands/",
   "systemPromptPath": "./SYSTEM.md",
   "mcpServers": {
     "kimi-mem": {
@@ -28,6 +29,11 @@
       "event": "UserPromptSubmit",
       "command": "node ./hooks/inject.mjs",
       "timeout": 30
+    },
+    {
+      "event": "TurnStarted",
+      "command": "node ./hooks/switch.mjs",
+      "timeout": 5
     },
     {
       "event": "Stop",

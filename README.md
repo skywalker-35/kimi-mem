@@ -10,6 +10,7 @@ It automatically captures a summary of every coding session into a local vector 
 
 - **Automatic capture**: when a session (or turn) ends, an LLM distills the work into a single memory stored in a local vector store (with tool-call context, automatic retry on failure, and `private`-marker filtering)
 - **Automatic injection**: on the first message of a session, semantically searches relevant past memories + recent project memories, and injects them into context together with your **user profile**
+- **Per-session injection switch**: `/kimi-mem:inject off|on|status` toggles injection for the current session (persisted per session, survives resume; capture is not affected)
 - **User profile learning**: every 10 prompts, an LLM summarizes your preferences / habits / workflows into an evolving profile
 - **Web UI**: browse / search / edit memories, timeline, and user profile (default `http://127.0.0.1:5757`)
 - **MCP server**: 9 `memory_*` tools (search / add / list / export / import / migrate …) so the agent can actively store and recall memories

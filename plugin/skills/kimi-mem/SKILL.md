@@ -1,4 +1,5 @@
 ---
+name: kimi-mem
 description: kimi-mem 持久项目记忆的使用规范。当需要主动保存/搜索/管理长期记忆，或用户提到"记住"、"之前做过"、"上次怎么解决的"时触发。
 ---
 
@@ -11,6 +12,14 @@ description: kimi-mem 持久项目记忆的使用规范。当需要主动保存/
 - **自动注入**：每个会话的首条消息、以及会话压缩（compaction）后的首条消息，相关记忆会以 `<kimi-mem-context>` 块自动追加到上下文（对齐 opencode-mem 的 injectOn: first 策略）。看到该块时优先参考其中的历史决策和坑；同会话后续消息不再注入，需要时主动用 memory_search。注入块末尾可能追加 `<user_profile>` 段（已学到的跨项目用户画像），其偏好/模式/工作流可作为个性化参考。
 - **自动捕获**：对话结束后，后台自动提炼技术要点写入记忆库，不需要用户说"记住这个"。
 - **用户画像自动学习**：每积累约 10 条未学习 prompt，daemon 在后台异步跑一次 LLM 分析（复用 capture 段同一 provider），把提炼出的 preferences / patterns / workflows 写进用户画像库（vendor `user-profiles.db`），并在 `<user_profile>` 块中以最高优先级注入首条消息上下文。置信度衰减、证据合并、changelog 由 vendor `userProfileManager` 内部处理。日志 `~/.kimi-mem/profile-debug.log`。
+
+## 会话级注入开关
+
+- `/kimi-mem:inject off` — 关闭当前会话的记忆注入（自动捕获不受影响）
+- `/kimi-mem:inject on` — 恢复注入（注入时机为首条消息/压缩后首条，恢复后将在下次压缩后重新注入）
+- `/kimi-mem:inject status` — 查看当前会话注入状态
+
+状态按 session 持久（resume 同一会话时延续），存于 `~/.kimi-mem/inject-switch.json`。
 
 ## 手动工具（MCP：`kimi-mem`）
 

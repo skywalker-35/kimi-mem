@@ -261,6 +261,74 @@ export function logDebug(msg) {
   }
 }
 
+// ---- 会话级注入开关（/kimi-mem:inject off|on|status）----
+// 状态文件：{ [sessionId]: { disabled: bool, t: 时间戳 } }，只影响注入，不影响捕获
+export const SWITCH_FILE = path.join(
+  os.homedir(),
+  ".kimi-mem",
+  "inject-switch.json"
+);
+
+export function loadSwitch() {
+  try {
+    return JSON.parse(fs.readFileSync(SWITCH_FILE, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+export function saveSwitch(state) {
+  const entries = Object.entries(state)
+    .sort((a, b) => (b[1].t ?? 0) - (a[1].t ?? 0))
+    .slice(0, 200);
+  try {
+    fs.mkdirSync(path.dirname(SWITCH_FILE), { recursive: true });
+    fs.writeFileSync(SWITCH_FILE, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // 状态写失败不影响主流程
+  }
+}
+
+// 匹配开关指令，返回 "on" | "off" | "status" | null
+// 两种来源：插件命令展开后的机读标记 / 用户直接输入的同形文本
+// 动作只取开头第一个英文单词（用户可能在命令后直接跟问题，如 "off, 顺便看看..."），
+// 其余文本不影响状态判定；无参数或无法识别的词一律按 status 处理
+export function matchSwitchCommand(prompt) {
+  if (typeof prompt !== "string" || !prompt) return null;
+  const m =
+    prompt.match(/^KIMI_MEM_INJECT_SWITCH:[ \t]*([a-zA-Z]+)?/im) ??
+    prompt.match(/^\/kimi-mem:inject(?:[ \t]+(\S+))?[ \t]*$/i);
+  if (!m) return null;
+  const arg = (m[1] || "").toLowerCase();
+  return ["on", "off", "status"].includes(arg) ? arg : "status";
+}
+
+// 最近一次开关操作的结果，供插件命令 body 让模型原样转述。
+// 模型拿不到自己的 session id，status 文案必须由 hook 侧（有 session_id）生成，
+// 否则模型只能猜状态文件里最近一条记录——那条可能属于别的会话
+export const SWITCH_STATUS_FILE = path.join(
+  os.homedir(),
+  ".kimi-mem",
+  "inject-switch-last.json"
+);
+
+export function writeSwitchStatus(sessionId, action) {
+  try {
+    const disabled = sessionId
+      ? loadSwitch()[sessionId]?.disabled === true
+      : false;
+    const statusText = sessionId
+      ? `kimi-mem：当前会话记忆注入${disabled ? "已关闭" : "开启中"}（自动捕获始终不受影响）`
+      : "kimi-mem：无法确定当前会话 id";
+    fs.writeFileSync(
+      SWITCH_STATUS_FILE,
+      JSON.stringify({ sessionId, action, disabled, t: Date.now(), statusText })
+    );
+  } catch {
+    // 状态写失败不影响主流程
+  }
+}
+
 // 解析用户 email：直接对指定 cwd 跑 `git -C <cwd> config user.email`，不依赖 hook 进程 cwd
 // vendor 的 getUserTagInfo() → getGitEmail() 用 execSync("git config user.email")，进程 cwd 不在
 // 项目下时会拿到 undefined（注入钩子在插件目录下被 spawn，cwd != 用户项目）。

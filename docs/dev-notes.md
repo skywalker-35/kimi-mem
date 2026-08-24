@@ -9,6 +9,7 @@ Kimi Code 插件（plugin/）
 ├── hooks/inject.mjs         UserPromptSubmit → 检索相关记忆注入上下文
 ├── hooks/capture.mjs        Stop/SessionEnd → POST 给 daemon sidecar 后立即退出
 ├── mcp-server.mjs           memory_search / add / list / forget / profile / export / import / list_shards / migrate
+├── commands/inject.md       斜杠命令 /kimi-mem:inject off|on|status（会话级注入开关）
 └── skills/kimi-mem/         使用规范
 
 daemon/
@@ -42,6 +43,8 @@ daemon/
 - 会话记录来源：`$KIMI_CODE_HOME/sessions/*/session_*/agents/main/wire.jsonl` 中的 `turn.prompt`（用户）和 `content.part`/`text`（助手）
 - **vendor `initConfig` 会重建 CONFIG 对象**（`let CONFIG` 重赋值）：`const { CONFIG } = await import(...)` 解构拿到的是快照，initConfig 之后再改它改的是旧对象，别人看不到——一律用命名空间访问 `configMod.CONFIG`（live binding）。这条同时是 Web UI 用户画像页 "No profile found" 的根因：`/api/user-profile` 默认 userId 走 vendor `getTags(process.cwd())`，其 `getGitEmail` 依赖进程 cwd 跑 `git config user.email`，daemon 的 cwd 不在用户项目里（且用户只有仓库级 git email，无 --global）→ 解析成 unknown。修复：capture-core 每次捕获用 `getUserEmail(cwd)`（`git -C <cwd>`）解析真实 email 写入 `configMod.CONFIG.userEmailOverride` 并持久化到 `~/.kimi-mem/user-email`；start.mjs 启动时恢复；profile-learning 在自己的 initConfig 后重新应用
 - debug 日志：`~/.kimi-mem/debug.log`（捕获/注入/通知）、`~/.kimi-mem/profile-debug.log`（画像学习），均本地时区
+- **会话级注入开关**（2026-08-24）：`/kimi-mem:inject off|on|status`。机制：插件清单 `commands` 字段注册命令，body 首行嵌机读标记 `KIMI_MEM_INJECT_SWITCH:$ARGUMENTS`。**关键事实：插件斜杠命令提交（wire 里 `origin.kind=plugin_command`）不触发 UserPromptSubmit**（实测：两次命令提交 debug.log 无任何 inject fired 记录，普通消息才触发），所以状态写入走 `hooks/switch.mjs`（TurnStarted，每个 turn 都触发且 payload 带 prompt，含插件命令展开后的 body）；TurnStarted 是观察型事件不能阻塞模型调用，命令 body 本身兼作模型可见的确认文案。inject.mjs（UserPromptSubmit）仍保留同形文本拦截（exit 2 阻断），兜底普通消息路径；注入前检查 `~/.kimi-mem/inject-switch.json`（`{sessionId:{disabled,t}}`，留 200 条），disabled 会话在 ensureDaemon 之前直接 return。只影响注入，capture 不受影响。匹配逻辑/状态读写共享在 lib/common.mjs（matchSwitchCommand/loadSwitch/saveSwitch）；动作只取开头第一个英文单词（支持 `/kimi-mem:inject off, 顺便提问…` 的组合用法，body 指示模型先回状态行再回答后续问题）；确认文案由 hook 侧写 `~/.kimi-mem/inject-switch-last.json` 的 statusText 供模型原样转述（模型拿不到自己的 session id，不能让它猜状态文件里最近一条——那条可能属于别的会话）。踩过的坑：拦截正则最初用 `\b` 锚定参数，**空参数（用户直接敲 `/kimi-mem:inject`）时无词边界导致匹配失败穿透到模型**；初版动作取 `(\S*)` 会把 `off,` 整体捕获导致降级 status
+- **`/plugins install` 报 EBUSY（rename managed\kimi-mem 失败）的根因**：插件 hook 由 CLI 以插件根目录为 cwd 启动，ensureDaemon spawn bun 时未指定 cwd，daemon 继承了 managed 副本目录作为工作目录，Windows 下目录被占用无法 rename。规避：直接 cp 改动文件到 `F:\.kimi-code\plugins\managed\kimi-mem\` 对应位置（Node 不锁已加载文件）再 `/plugins reload`；或先 kill daemon（bun 进程，下次 hook 自动拉起）再走官方 install
 
 ## 安装
 

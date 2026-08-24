@@ -8,7 +8,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadConfig, readStdinJson, ensureDaemon, getProjectTag, logDebug, loadVendorMemory, getUserEmail } from "../lib/common.mjs";
+import { loadConfig, readStdinJson, ensureDaemon, getProjectTag, logDebug, loadVendorMemory, getUserEmail, loadSwitch, saveSwitch, matchSwitchCommand } from "../lib/common.mjs";
 import { api } from "../lib/api.mjs";
 
 const WRAP_OPEN = "<kimi-mem-context>";
@@ -17,6 +17,37 @@ const WRAP_CLOSE = "</kimi-mem-context>";
 // 会话注入状态：{ [sessionId]: { t: 上次注入时间, offset: 当时 wire.jsonl 行数 } }
 // offset 之后出现 compaction 事件 → 压缩后需要重新注入
 const SEEN_FILE = path.join(os.homedir(), ".kimi-mem", "inject-seen.json");
+
+// 会话级注入开关的状态读写/指令匹配在 lib/common.mjs（loadSwitch/saveSwitch/matchSwitchCommand），
+// 与 hooks/switch.mjs（TurnStarted 入口）共享
+
+// 拦截开关指令；命中则处理并 exit 2（阻止本轮模型调用，stderr 作为反馈展示给用户）
+// 注意：插件斜杠命令（origin=plugin_command）不触发 UserPromptSubmit，那条链路由
+// hooks/switch.mjs（TurnStarted）负责写状态；这里只兜底普通消息里的同形文本
+function handleSwitchCommand(prompt, sessionId) {
+  const action = matchSwitchCommand(prompt);
+  if (!action) return false;
+  if (!sessionId) {
+    console.error("kimi-mem：无法确定当前会话 id，开关未生效");
+    process.exit(2);
+  }
+
+  const state = loadSwitch();
+  if (action === "status") {
+    const disabled = state[sessionId]?.disabled === true;
+    console.error(`kimi-mem：当前会话记忆注入${disabled ? "已关闭" : "开启中"}`);
+    process.exit(2);
+  }
+
+  state[sessionId] = { disabled: action === "off", t: Date.now() };
+  saveSwitch(state);
+  console.error(
+    action === "off"
+      ? "kimi-mem：本会话记忆注入已关闭（自动捕获不受影响）"
+      : "kimi-mem：本会话记忆注入已恢复（注入时机为首条消息/压缩后首条，将在下次压缩后重新注入）"
+  );
+  process.exit(2);
+}
 
 function loadSeen() {
   try {
@@ -92,6 +123,14 @@ async function main() {
         .join("\n")
     : String(rawPrompt);
   const cwd = payload.cwd ?? process.cwd();
+
+  // 会话级开关指令优先拦截（在 minPromptLength 检查之前，短指令也要能命中）
+  handleSwitchCommand(prompt, payload.session_id);
+
+  // 本会话已关闭注入：直接返回（不拉起 daemon、不检索）
+  if (payload.session_id && loadSwitch()[payload.session_id]?.disabled === true) {
+    return;
+  }
 
   if (typeof prompt !== "string" || prompt.trim().length < cfg.inject.minPromptLength) {
     return;
