@@ -13,7 +13,7 @@ Kimi Code 插件（plugin/）
 └── skills/kimi-mem/         使用规范
 
 daemon/
-├── start.mjs                独立启动 opencode-mem WebServer + sidecar(5758)（必须用 bun）
+├── start.mjs                独立启动 opencode-mem WebServer + sidecar(5768)（必须用 bun）
 ├── capture-core.mjs         捕获核心：wire.jsonl 增量 → LLM 提炼 → 进程内写 vendor 模块
 ├── run-hidden.vbs / toast.ps1  Windows toast 通知链路
 └── opencode-mem/            上游源码 + 构建产物（vendor；分支 kimi-windows-hide 上有一处补丁，见下）
@@ -22,7 +22,7 @@ daemon/
 ## 关键事实
 
 - **端口 5757**（避开 opencode-mem 自己的 4747/4750）；Web UI: http://127.0.0.1:5757
-- **sidecar 捕获接口 5758**（`POST /capture`，需 token）：hooks 只发 HTTP 请求，捕获在 daemon 进程内异步执行，不 spawn 子进程（避免终端退出时弹控制台窗口）
+- **sidecar 捕获接口 5768**（`POST /capture`，需 token）：hooks 只发 HTTP 请求，捕获在 daemon 进程内异步执行，不 spawn 子进程（避免终端退出时弹控制台窗口）
 - **存储与 opencode-mem 共享** `~/.opencode-mem/data`，两边记忆互通；API token 在 `~/.opencode-mem/.auth-token`（所有 /api/* 请求必须带 `x-opencode-mem-token` 头）
 - **daemon 必须用 bun 跑**：web-server 的 node:http 适配层对带 body 的 POST 会提前销毁 socket（上游 bug，`server.unref()` + req close 事件）；Node 下 GET 正常、POST 空响应。注意 spawn 时如果 bun 只有 .cmd shim（无 bun.exe 真实二进制）会解析不到，必须指向真实 exe 路径（可用 config.bunPath 或 KIMI_MEM_BUN 环境变量指定）
 - hooks 检测到 daemon 未运行会自动拉起（ensureDaemon）

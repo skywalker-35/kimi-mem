@@ -1,12 +1,6 @@
 MIT License
 
-Copyright (c) 2025-2026 opencode-mem contributors
-(https://github.com/tickernelz/opencode-mem)
-
-本目录是 tickernelz/opencode-mem 的内嵌副本（vendored fork），
-上游在 package.json 中声明 MIT License，仓库未附带 LICENSE 文件，
-此文件按 MIT 标准文本补齐。kimi-mem 对其做了少量 Windows 兼容补丁
-（见 daemon/opencode-mem/PATCHES.md）。
+Copyright (c) 2025 Zhafron Adani Kautsar
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

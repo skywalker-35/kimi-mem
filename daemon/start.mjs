@@ -62,7 +62,9 @@ const { runCapture } = await import(
   pathToFileURL(path.join(here, "capture-core.mjs")).href
 );
 
-const sidecarPort = Number(process.env.KIMI_MEM_PORT ?? 5757) + 1;
+// sidecar 固定在 base+11：上游 v2.25.0 起 WebServer 接管失败会按 base+1..base+10 回退端口，
+// sidecar 若留在 base+1 会被回退的 WebServer 抢占，导致 capture 静默 404 丢失
+const sidecarPort = Number(process.env.KIMI_MEM_PORT ?? 5757) + 11;
 const sidecar = http.createServer((req, res) => {
   const token = readFileSync(
     path.join(homedir(), ".opencode-mem", ".auth-token"),

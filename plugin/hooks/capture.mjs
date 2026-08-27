@@ -11,7 +11,8 @@ async function main() {
 
   if (!(await ensureDaemon())) return;
 
-  await fetch(`http://127.0.0.1:${cfg.port + 1}/capture`, {
+  // sidecar 在 port+11（避开 WebServer 的 port+1..port+10 回退窗口）
+  await fetch(`http://127.0.0.1:${cfg.port + 11}/capture`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

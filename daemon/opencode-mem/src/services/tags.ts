@@ -60,7 +60,7 @@ export function getGitEmail(): string | null {
     const email = execSync("git config user.email", {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true, // kimi-mem 补丁：daemon 无控制台进程，防止拉起 git.exe 时闪控制台窗口
+      windowsHide: true, // kimi-mem 补丁
     }).trim();
     return email || null;
   } catch {
@@ -73,7 +73,7 @@ export function getGitName(): string | null {
     const name = execSync("git config user.name", {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true, // kimi-mem 补丁：daemon 无控制台进程，防止拉起 git.exe 时闪控制台窗口
+      windowsHide: true, // kimi-mem 补丁
     }).trim();
     return name || null;
   } catch {
@@ -87,7 +87,7 @@ export function getGitRepoUrl(directory: string): string | null {
       encoding: "utf-8",
       cwd: directory,
       stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true, // kimi-mem 补丁：daemon 无控制台进程，防止拉起 git.exe 时闪控制台窗口
+      windowsHide: true, // kimi-mem 补丁
     }).trim();
     return url || null;
   } catch {
@@ -101,7 +101,7 @@ export function getGitCommonDir(directory: string): string | null {
       encoding: "utf-8",
       cwd: directory,
       stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true, // kimi-mem 补丁：daemon 无控制台进程，防止拉起 git.exe 时闪控制台窗口
+      windowsHide: true, // kimi-mem 补丁
     }).trim();
 
     if (!commonDir) {
@@ -130,7 +130,7 @@ export function getGitTopLevel(directory: string): string | null {
       encoding: "utf-8",
       cwd: directory,
       stdio: ["ignore", "pipe", "ignore"],
-      windowsHide: true, // kimi-mem 补丁：daemon 无控制台进程，防止拉起 git.exe 时闪控制台窗口
+      windowsHide: true, // kimi-mem 补丁
     }).trim();
     return topLevel || null;
   } catch {

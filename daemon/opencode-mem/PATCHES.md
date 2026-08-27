@@ -1,10 +1,10 @@
 # kimi-mem 对上游 opencode-mem 的补丁清单
 
-本目录是 [tickernelz/opencode-mem](https://github.com/tickernelz/opencode-mem) 的内嵌副本（vendor fork），基于上游 `main`（`eda6583`）。kimi-mem 对上游源码的修改**仅有以下一处文件**，其余全部为零改动：
+本目录是 [tickernelz/opencode-mem](https://github.com/tickernelz/opencode-mem) 的内嵌副本（vendor fork），基于上游 `v2.25.0`（`d1d0eb0`）。kimi-mem 对上游源码的修改**仅有以下一处文件**，其余全部为零改动：
 
 ## `src/services/tags.ts` — 5 处 `windowsHide: true` 补丁
 
-**位置**：`getGitEmail` / `getGitUserName` 等函数中的 5 处 `execSync("git ...")` 调用（约 63、76、90、104、133 行）。
+**位置**：`getGitEmail` / `getGitName` 等函数中的 5 处 `execSync("git ...")` 调用（v2.25.0 起约 60、72、84、97、125 行；上游已把 `stdio` 从 `["pipe","pipe","pipe"]` 改为 `["ignore","pipe","ignore"]`，补丁只加 `windowsHide`，不动 stdio）。
 
 **问题**：kimi-mem 的 daemon 是以无控制台方式拉起的后台进程。上游这些 `execSync` 没有 `windowsHide: true`，在 Windows 上每次调用都会弹出 `git.exe` 控制台黑窗（表现为"会话结束时命令行窗口闪退/闪烁"）。
 
@@ -13,7 +13,7 @@
 ```ts
 execSync("git config user.email", {
   encoding: "utf-8",
-  stdio: ["pipe", "pipe", "pipe"],
+  stdio: ["ignore", "pipe", "ignore"],
   windowsHide: true, // kimi-mem 补丁
 });
 ```

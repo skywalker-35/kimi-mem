@@ -26,7 +26,7 @@ Kimi Code
   │ MCP: plugin/mcp-server.mjs                          (memory_* tools)
   ▼
 daemon (bun process, custom integration layer)
-  ├─ daemon/start.mjs            Web UI + HTTP API (:5757) + capture sidecar (:5758)
+  ├─ daemon/start.mjs            Web UI + HTTP API (:5757) + capture sidecar (:5768)
   ├─ daemon/capture-core.mjs     capture core: read session transcript → LLM distill → vector store
   ├─ daemon/profile-learning.mjs user profile learning
   └─ daemon/opencode-mem/        vendored upstream (only 1 patched file, see PATCHES.md)
@@ -117,7 +117,7 @@ Then in Kimi Code:
 
 | Key | Description | Default |
 |---|---|---|
-| `port` | Web UI / API port (capture sidecar = port+1) | `5757` |
+| `port` | Web UI / API port (capture sidecar = port+11) | `5757` |
 | `daemonHome` | daemon code directory (containing `start.mjs`) | `daemon/` inside the plugin root (zip layout) or sibling of `plugin/` (repo layout) |
 | `bunPath` | bun executable path (alternative: `KIMI_MEM_BUN` env var) | auto-detect |
 | `inject.enabled` / `maxResults` / `minPromptLength` | injection switch / max injected memories / skip retrieval below this prompt length | `true` / `5` / `8` |
@@ -145,7 +145,7 @@ If you already use OpenCode with opencode-mem:
 - **Fully shared database**: kimi-mem deliberately reuses opencode-mem's default storage (`~/.opencode-mem/data`), config file (`~/.config/opencode/opencode-mem.jsonc`), project-tag algorithm, and auth token. Memories from both tools land in the same shard for the same project — captured in OpenCode, injectable in Kimi Code, and vice versa. Your history is visible immediately after installing kimi-mem, zero migration
 - **Independent processes**: each daemon runs its own port (opencode-mem 4747, kimi-mem 5757 by default); either can run alone or both together
 - **Concurrent captures**: both daemons write to the same local SQLite/libSQL file. In theory there is momentary lock contention, but in practice: ① each side only captures its own tool's sessions, never duplicate content; ② writes are short transactions, collisions are extremely unlikely; ③ SQLite commits are atomic — no corruption possible, and kimi-mem retries failed captures automatically. Long-term dual-daemon coexistence verified
-- **Version consistency**: shared storage means both sides should track similar upstream versions. If a future opencode-mem release changes the storage format or tag algorithm, wait for a matching kimi-mem update before mixing (vendor version: see `daemon/opencode-mem/package.json`, currently based on upstream `eda6583`)
+- **Version consistency**: shared storage means both sides should track similar upstream versions. If a future opencode-mem release changes the storage format or tag algorithm, wait for a matching kimi-mem update before mixing (vendor version: see `daemon/opencode-mem/package.json`, currently based on upstream `v2.25.0` (`d1d0eb0`))
 
 ## FAQ
 
