@@ -1,6 +1,6 @@
 {
   "name": "kimi-mem",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Persistent project memory for Kimi Code，基于 opencode-mem 的本地向量存储",
   "license": "MIT",
   "author": "skywalker-35",
@@ -21,7 +21,9 @@
   "mcpServers": {
     "kimi-mem": {
       "command": "node",
-      "args": ["./mcp-server.mjs"]
+      "args": [
+        "./mcp-server.mjs"
+      ]
     }
   },
   "hooks": [
