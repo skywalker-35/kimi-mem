@@ -1,24 +1,26 @@
 # kimi-mem 对上游 opencode-mem 的补丁清单
 
-本目录是 [tickernelz/opencode-mem](https://github.com/tickernelz/opencode-mem) 的内嵌副本（vendor fork），基于上游 `v2.25.0`（`d1d0eb0`）。kimi-mem 对上游源码的修改**仅有以下一处文件**，其余全部为零改动：
+本目录是 [tickernelz/opencode-mem](https://github.com/tickernelz/opencode-mem) 的内嵌副本（vendor fork），基于上游 `v2.26.0`（`5cd24f9`）。kimi-mem 对上游源码的修改**仅有以下一处文件**，其余全部为零改动：
 
-## `src/services/tags.ts` — 5 处 `windowsHide: true` 补丁
+## `src/services/tags.ts` — 1 处 `windowsHide: true` 补丁
 
-**位置**：`getGitEmail` / `getGitName` 等函数中的 5 处 `execSync("git ...")` 调用（v2.25.0 起约 60、72、84、97、125 行；上游已把 `stdio` 从 `["pipe","pipe","pipe"]` 改为 `["ignore","pipe","ignore"]`，补丁只加 `windowsHide`，不动 stdio）。
+**位置**：`runGit` 函数中唯一的 `execFileSync` 调用（v2.26.0 约 120 行）。上游 v2.26.0（PR #294）已把原来 5 处 `execSync("git ...")` 重构为统一的 `runGit` → 单处 `execFileSync`（可信 Git 路径解析），补丁随之从 5 处缩减为 1 处。
 
-**问题**：kimi-mem 的 daemon 是以无控制台方式拉起的后台进程。上游这些 `execSync` 没有 `windowsHide: true`，在 Windows 上每次调用都会弹出 `git.exe` 控制台黑窗（表现为"会话结束时命令行窗口闪退/闪烁"）。
+**问题**：kimi-mem 的 daemon 是以无控制台方式拉起的后台进程。上游这个 `execFileSync` 没有 `windowsHide: true`，在 Windows 上每次调用都会弹出 `git.exe` 控制台黑窗（表现为"会话结束时命令行窗口闪退/闪烁"）。
 
-**修复**：给这 5 处 `execSync` 的 options 增加 `windowsHide: true`：
+**修复**：给 `execFileSync` 的 options 增加 `windowsHide: true`：
 
 ```ts
-execSync("git config user.email", {
+const output = execFileSync(gitCommand.executable, args, {
   encoding: "utf-8",
+  cwd: directory,
   stdio: ["ignore", "pipe", "ignore"],
+  shell: gitCommand.shell,
   windowsHide: true, // kimi-mem 补丁
-});
+}).trim();
 ```
 
-**升级上游时重放方法**：拉取上游新版后，搜索 `src/services/tags.ts` 中所有 `execSync`，逐个补上 `windowsHide: true`（共 5 处），然后重新构建：
+**升级上游时重放方法**：拉取上游新版后，搜索 `src/services/tags.ts` 中所有 `execSync` / `execFileSync` 调用点，逐个补上 `windowsHide: true`（v2.26.0 起仅 `runGit` 内 1 处），然后重新构建：
 
 ```bash
 cd daemon/opencode-mem

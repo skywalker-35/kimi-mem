@@ -2,6 +2,11 @@ import type { UserProfileData } from "./types.js";
 import { CONFIG } from "../../config.js";
 import { log } from "../logger.js";
 import { loadOpencodeProvider } from "../ai/opencode-provider-loader.js";
+import {
+  EXTERNAL_PROFILE_CLEANUP_TIMEOUT_MS,
+  OPENCODE_PROFILE_CLEANUP_TIMEOUT_MS,
+} from "../request-timeouts.js";
+import { applySafeExtraParams } from "../ai/providers/base-provider.js";
 
 export interface AICleanupResult {
   cleaned: UserProfileData;
@@ -238,22 +243,29 @@ async function callViaExternalAPI(
   const systemPrompt =
     "You are a user profile cleanup assistant. Merge duplicate entries and return only JSON.";
 
+  const requestBody: Record<string, unknown> = {};
+  if (CONFIG.memoryExtraParams) {
+    applySafeExtraParams(requestBody, CONFIG.memoryExtraParams);
+  }
+
+  Object.assign(requestBody, {
+    model: CONFIG.memoryModel,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: prompt },
+    ],
+    temperature: 0.3,
+    response_format: { type: "json_object" },
+  });
+
   const response = await fetch(`${CONFIG.memoryApiUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${CONFIG.memoryApiKey}`,
     },
-    body: JSON.stringify({
-      model: CONFIG.memoryModel,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.3,
-      response_format: { type: "json_object" },
-    }),
-    signal: AbortSignal.timeout(60000),
+    body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(EXTERNAL_PROFILE_CLEANUP_TIMEOUT_MS),
   });
 
   log("AI cleanup: external API http done", { httpMs: Date.now() - t0, status: response.status });
@@ -277,9 +289,6 @@ async function callViaExternalAPI(
     mapping: normalizeAIMapping(parsed.mapping),
   };
 }
-
-/** Prompt timeout for profile cleanup sessions (large profiles can exceed 2 minutes). */
-const OPENCODE_CLEANUP_TIMEOUT_MS = 300000;
 
 type PromptPart = { type?: string; text?: string };
 type PromptInfo = {
@@ -349,7 +358,7 @@ async function callViaOpencodeWithClient(
   log("AI cleanup: session created", { sessionID, createMs: Date.now() - t0 });
 
   try {
-    const TIMEOUT_MS = OPENCODE_CLEANUP_TIMEOUT_MS;
+    const TIMEOUT_MS = OPENCODE_PROFILE_CLEANUP_TIMEOUT_MS;
     const promptResult = await raceWithTimeout(
       v2Client.session.prompt({
         sessionID,

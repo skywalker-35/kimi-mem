@@ -228,6 +228,27 @@ function loadConfigFromPaths(paths: string[]): OpenCodeMemConfig {
   return {};
 }
 
+const GLOBAL_ONLY_REMOTE_PROVIDER_FIELDS: ReadonlyArray<keyof OpenCodeMemConfig> = [
+  "embeddingApiUrl",
+  "embeddingApiKey",
+  "memoryProvider",
+  "memoryApiUrl",
+  "memoryApiKey",
+];
+
+function assertProjectRemoteProviderConfigIsSafe(projectConfig: OpenCodeMemConfig): void {
+  const configuredFields = GLOBAL_ONLY_REMOTE_PROVIDER_FIELDS.filter((field) =>
+    Object.prototype.hasOwnProperty.call(projectConfig, field)
+  );
+
+  if (configuredFields.length > 0) {
+    throw new Error(
+      `Project config cannot set remote provider fields: ${configuredFields.join(", ")}. ` +
+        `Move them to the global config at ${CONFIG_FILES[0]}.`
+    );
+  }
+}
+
 const CONFIG_TEMPLATE = `{
   // ============================================
   // OpenCode Memory Plugin Configuration
@@ -600,6 +621,13 @@ export function normalizeAutoCaptureMaxContextBytes(value: number): number {
   return value;
 }
 
+export function normalizeAutoCleanupRetentionDays(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`Invalid autoCleanupRetentionDays config: ${value}`);
+  }
+  return value;
+}
+
 function buildConfig(fileConfig: OpenCodeMemConfig) {
   const memoryApiKey = resolveSecretValue(fileConfig.memoryApiKey);
   const embeddingDimensions =
@@ -676,8 +704,9 @@ function buildConfig(fileConfig: OpenCodeMemConfig) {
       : undefined,
     maxVectorsPerShard: fileConfig.maxVectorsPerShard ?? DEFAULTS.maxVectorsPerShard,
     autoCleanupEnabled: fileConfig.autoCleanupEnabled ?? DEFAULTS.autoCleanupEnabled,
-    autoCleanupRetentionDays:
-      fileConfig.autoCleanupRetentionDays ?? DEFAULTS.autoCleanupRetentionDays,
+    autoCleanupRetentionDays: normalizeAutoCleanupRetentionDays(
+      fileConfig.autoCleanupRetentionDays ?? DEFAULTS.autoCleanupRetentionDays
+    ),
     deduplicationEnabled: fileConfig.deduplicationEnabled ?? DEFAULTS.deduplicationEnabled,
     deduplicationSimilarityThreshold:
       fileConfig.deduplicationSimilarityThreshold ?? DEFAULTS.deduplicationSimilarityThreshold,
@@ -823,7 +852,11 @@ export function initConfig(directory: string): void {
   ];
   const globalConfig = loadConfigFromPaths(CONFIG_FILES);
   const projectConfig = loadConfigFromPaths(projectPaths);
-  const merged: OpenCodeMemConfig = { ...globalConfig, ...projectConfig };
+  assertProjectRemoteProviderConfigIsSafe(projectConfig);
+  const projectOverrides = { ...projectConfig };
+  delete projectOverrides.autoCleanupEnabled;
+  delete projectOverrides.autoCleanupRetentionDays;
+  const merged: OpenCodeMemConfig = { ...globalConfig, ...projectOverrides };
   CONFIG = buildConfig(merged);
 }
 
