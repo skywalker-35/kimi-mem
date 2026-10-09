@@ -36,7 +36,9 @@ describe("cold buffer per-user isolation (correctness #1)", () => {
     await new Promise((r) => setTimeout(r, 50));
     try {
       rmSync(tmpDir, { recursive: true, force: true });
-    } catch {}
+    } catch {
+      // ignore leftover test files
+    }
   });
 
   it("does not drain one user's buffered items into another user's merge", async () => {

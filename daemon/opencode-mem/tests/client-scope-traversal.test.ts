@@ -9,10 +9,8 @@ const clientUrl = new URL("../src/services/client.js", import.meta.url).href;
 const embeddingUrl = new URL("../src/services/embedding.js", import.meta.url).href;
 const shardManagerUrl = new URL("../src/services/turso/shard-manager.js", import.meta.url).href;
 const vectorSearchUrl = new URL("../src/services/turso/vector-search.js", import.meta.url).href;
-const connectionManagerUrl = new URL(
-  "../src/services/turso/connection-manager.js",
-  import.meta.url
-).href;
+const connectionManagerUrl = new URL("../src/services/turso/connection-manager.js", import.meta.url)
+  .href;
 const vectorUtilsUrl = new URL("../src/services/turso/vector-utils.js", import.meta.url).href;
 const readyUrl = new URL("../src/services/turso/ready.js", import.meta.url).href;
 const configUrl = new URL("../src/config.js", import.meta.url).href;
@@ -62,6 +60,7 @@ mock.module(${JSON.stringify(connectionManagerUrl)}, () => ({
 
 mock.module(${JSON.stringify(vectorUtilsUrl)}, () => ({
   formatTagsForEmbedding: (tags) => tags.join(" "),
+  parseSessionIdFromMetadata: () => null,
 }));
 
 mock.module(${JSON.stringify(readyUrl)}, () => ({

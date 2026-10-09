@@ -28,19 +28,11 @@ function scoreByRecency(items: any[]): any[] {
   });
 }
 
-function escapeXmlText(value: unknown): string {
+function escapeContextText(value: unknown): string {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
-}
-
-function escapeXmlAttr(value: unknown): string {
-  return String(value ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 export async function getUserProfileContext(userId: string): Promise<string | null> {
@@ -87,14 +79,16 @@ export async function getUserProfileContext(userId: string): Promise<string | nu
   if (topPrefs.length > 0) {
     parts.push("User Preferences:");
     topPrefs.forEach((pref: any) => {
-      parts.push(`- [${pref.category}] ${pref.description}`);
+      parts.push(`- [${escapeContextText(pref.category)}] ${escapeContextText(pref.description)}`);
     });
   }
 
   if (topPats.length > 0) {
     parts.push("\nUser Patterns:");
     topPats.forEach((pattern: any) => {
-      parts.push(`- [${pattern.category}] ${pattern.description}`);
+      parts.push(
+        `- [${escapeContextText(pattern.category)}] ${escapeContextText(pattern.description)}`
+      );
     });
   }
 
@@ -104,14 +98,14 @@ export async function getUserProfileContext(userId: string): Promise<string | nu
       const steps = workflow.steps?.length
         ? ` (${workflow.frequency || 1}x: ${workflow.steps.join(" → ")})`
         : ` (${workflow.frequency || 1}x)`;
-      parts.push(`- ${workflow.description}${steps}`);
+      parts.push(`- ${escapeContextText(workflow.description)}${escapeContextText(steps)}`);
     });
   }
 
   if ((profileData as any).learning_paths?.length > 0) {
     parts.push("\nLearning Paths:");
     (profileData as any).learning_paths.slice(0, 3).forEach((path: any) => {
-      parts.push(`- ${path.topic}: ${path.description}`);
+      parts.push(`- ${escapeContextText(path.topic)}: ${escapeContextText(path.description)}`);
     });
   }
 

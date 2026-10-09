@@ -38,7 +38,7 @@ function checkFilePermissions(filePath: string): void {
         `Warning: Secret file ${filePath} has permissive permissions (${mode.toString(8).padStart(3, "0")}) granting group/other access. Recommend chmod 600.`
       );
     }
-  } catch (error) {
+  } catch {
     console.warn(`Warning: Could not check file permissions for ${filePath}`);
   }
 }
@@ -61,7 +61,7 @@ export function resolveSecretValue(value: string | undefined): string | undefine
       const content = readFileSync(filePath, "utf-8");
       return content.trim();
     } catch (error) {
-      throw new Error(`Failed to read secret file ${filePath}: ${error}`);
+      throw new Error(`Failed to read secret file ${filePath}: ${error}`, { cause: error });
     }
   }
 

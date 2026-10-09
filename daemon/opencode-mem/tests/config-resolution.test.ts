@@ -1,6 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import * as fs from "node:fs";
-import { initConfig, CONFIG } from "../src/config.js";
+import {
+  initConfig,
+  CONFIG,
+  normalizeOpencodeTimeoutMs,
+  outerStructuredOutputTimeoutMs,
+  OPENCODE_TIMEOUT_MS_DEFAULT,
+} from "../src/config.js";
 
 describe("project-scoped config resolution", () => {
   let readSpy: ReturnType<typeof spyOn>;
@@ -182,10 +188,177 @@ describe("project-scoped config resolution", () => {
     expect(CONFIG.autoCaptureEnabled).toBe(false);
   });
 
+  it("parses opencodeVariant when set and treats blank values as unset", () => {
+    existsSpy = spyOn(fs, "existsSync").mockImplementation((p) =>
+      normalizePath(p).includes(".config/opencode/opencode-mem")
+    );
+    readSpy = spyOn(fs, "readFileSync");
+
+    readSpy.mockReturnValue(
+      JSON.stringify({
+        opencodeProvider: "newapi",
+        opencodeModel: "grok-4.7",
+        opencodeVariant: "xhigh",
+      }) as any
+    );
+    initConfig("/some/project");
+    expect(CONFIG.opencodeVariant).toBe("xhigh");
+
+    readSpy.mockReturnValue(
+      JSON.stringify({
+        opencodeProvider: "newapi",
+        opencodeModel: "grok-4.7",
+        opencodeVariant: "   ",
+      }) as any
+    );
+    initConfig("/some/project");
+    expect(CONFIG.opencodeVariant).toBeUndefined();
+
+    readSpy.mockReturnValue(
+      JSON.stringify({
+        opencodeProvider: "newapi",
+        opencodeModel: "grok-4.7",
+      }) as any
+    );
+    initConfig("/some/project");
+    expect(CONFIG.opencodeVariant).toBeUndefined();
+  });
+
+  it("parses opencodeTimeoutMs with clamping and default fallback", () => {
+    existsSpy = spyOn(fs, "existsSync").mockImplementation((p) =>
+      normalizePath(p).includes(".config/opencode/opencode-mem")
+    );
+    readSpy = spyOn(fs, "readFileSync");
+
+    readSpy.mockReturnValue(JSON.stringify({ opencodeTimeoutMs: 180000 }) as any);
+    initConfig("/some/project");
+    expect(CONFIG.opencodeTimeoutMs).toBe(180000);
+
+    // Below the floor.
+    readSpy.mockReturnValue(JSON.stringify({ opencodeTimeoutMs: 500 }) as any);
+    initConfig("/some/project");
+    expect(CONFIG.opencodeTimeoutMs).toBe(10000);
+
+    // Above the ceiling.
+    readSpy.mockReturnValue(JSON.stringify({ opencodeTimeoutMs: 9_999_999 }) as any);
+    initConfig("/some/project");
+    expect(CONFIG.opencodeTimeoutMs).toBe(600000);
+
+    // Non-finite values fall back to the default.
+    readSpy.mockReturnValue(JSON.stringify({ opencodeTimeoutMs: Number.POSITIVE_INFINITY }) as any);
+    initConfig("/some/project");
+    expect(CONFIG.opencodeTimeoutMs).toBe(90000);
+
+    // Numeric strings are coerced (common in hand-edited JSONC).
+    readSpy.mockReturnValue(JSON.stringify({ opencodeTimeoutMs: "180000" }) as any);
+    initConfig("/some/project");
+    expect(CONFIG.opencodeTimeoutMs).toBe(180000);
+
+    // Unset keeps the default.
+    readSpy.mockReturnValue(JSON.stringify({}) as any);
+    initConfig("/some/project");
+    expect(CONFIG.opencodeTimeoutMs).toBe(90000);
+  });
+
+  it("parses chatMessage.captureChildSessions from the global config", () => {
+    existsSpy = spyOn(fs, "existsSync").mockImplementation((p) =>
+      normalizePath(p).includes(".config/opencode/opencode-mem")
+    );
+    readSpy = spyOn(fs, "readFileSync");
+
+    readSpy.mockReturnValue(
+      JSON.stringify({
+        chatMessage: { captureChildSessions: true },
+      }) as any
+    );
+    initConfig("/some/project");
+    expect(CONFIG.chatMessage.captureChildSessions).toBe(true);
+
+    readSpy.mockReturnValue(JSON.stringify({ chatMessage: {} }) as any);
+    initConfig("/some/project");
+    expect(CONFIG.chatMessage.captureChildSessions).toBe(false);
+  });
+
   it("falls back to defaults when neither global nor project config exists", () => {
     existsSpy = spyOn(fs, "existsSync").mockReturnValue(false);
     initConfig("/no/config/project");
     expect(CONFIG.autoCaptureEnabled).toBe(true); // default value
     expect(CONFIG.opencodeProvider).toBeUndefined();
+  });
+
+  it("resolves Atlas Cloud API key from ATLASCLOUD_API_KEY and marks manual ready", () => {
+    const originalApiKey = process.env.ATLASCLOUD_API_KEY;
+    process.env.ATLASCLOUD_API_KEY = "atlas-test-key";
+
+    try {
+      existsSpy = spyOn(fs, "existsSync").mockReturnValue(true);
+      readSpy = spyOn(fs, "readFileSync").mockImplementation((p) => {
+        const path = normalizePath(p);
+        if (path.includes(".opencode/opencode-mem")) {
+          return JSON.stringify({ autoCaptureEnabled: true }) as any;
+        }
+        return JSON.stringify({ memoryProvider: "atlas-cloud" }) as any;
+      });
+
+      initConfig("/my/project");
+
+      expect(CONFIG.memoryProvider).toBe("atlas-cloud");
+      expect(CONFIG.memoryModel).toBeUndefined();
+      expect(CONFIG.memoryApiUrl).toBeUndefined();
+      expect(CONFIG.memoryApiKey).toBe("atlas-test-key");
+      expect(CONFIG.autoCaptureProviderStatus).toEqual({
+        ready: true,
+        mode: "manual",
+        issues: [],
+      });
+    } finally {
+      if (originalApiKey === undefined) {
+        delete process.env.ATLASCLOUD_API_KEY;
+      } else {
+        process.env.ATLASCLOUD_API_KEY = originalApiKey;
+      }
+    }
+  });
+
+  it("refuses a project config that switches memoryProvider to Atlas Cloud", () => {
+    existsSpy = spyOn(fs, "existsSync").mockReturnValue(true);
+    readSpy = spyOn(fs, "readFileSync").mockImplementation((p) => {
+      const path = normalizePath(p);
+      if (path.includes(".opencode/opencode-mem")) {
+        return JSON.stringify({ memoryProvider: "atlas-cloud" }) as any;
+      }
+      return JSON.stringify({
+        memoryProvider: "openai-chat",
+        memoryModel: "gpt-global",
+        memoryApiUrl: "https://api.openai.com/v1",
+        memoryApiKey: "global-openai-secret",
+      }) as any;
+    });
+
+    expect(() => initConfig("/my/project")).toThrow(
+      /Project config cannot set remote provider fields: memoryProvider/
+    );
+  });
+});
+
+describe("structured-output timeout derivation", () => {
+  it("outer race = configured + 30000 so the inner timeout always fires first", () => {
+    expect(outerStructuredOutputTimeoutMs(90_000)).toBe(120_000);
+    expect(outerStructuredOutputTimeoutMs(180_000)).toBe(210_000);
+    // Undefined falls back to the default (e.g. a partial CONFIG shape).
+    expect(outerStructuredOutputTimeoutMs(undefined)).toBe(OPENCODE_TIMEOUT_MS_DEFAULT + 30_000);
+  });
+
+  it("normalizeOpencodeTimeoutMs clamps and falls back to the default", () => {
+    expect(normalizeOpencodeTimeoutMs(90_000)).toBe(90_000);
+    expect(normalizeOpencodeTimeoutMs(5_000)).toBe(10_000);
+    expect(normalizeOpencodeTimeoutMs(1_000_000)).toBe(600_000);
+    expect(normalizeOpencodeTimeoutMs(undefined)).toBe(OPENCODE_TIMEOUT_MS_DEFAULT);
+    expect(normalizeOpencodeTimeoutMs(Number.NaN)).toBe(OPENCODE_TIMEOUT_MS_DEFAULT);
+    expect(normalizeOpencodeTimeoutMs(Number.POSITIVE_INFINITY)).toBe(OPENCODE_TIMEOUT_MS_DEFAULT);
+    expect(normalizeOpencodeTimeoutMs("180000")).toBe(180_000);
+    expect(normalizeOpencodeTimeoutMs(" 240000 ")).toBe(240_000);
+    expect(normalizeOpencodeTimeoutMs("abc")).toBe(OPENCODE_TIMEOUT_MS_DEFAULT);
+    expect(normalizeOpencodeTimeoutMs("")).toBe(OPENCODE_TIMEOUT_MS_DEFAULT);
   });
 });

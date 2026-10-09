@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tursoConnectionManager } from "../turso/connection-manager.js";
 import type { TursoDb } from "../turso/turso-db.js";
 import { CONFIG } from "../../config.js";
@@ -15,10 +16,12 @@ const CENTROID_EMA_WEIGHT_COMPLEMENT = 0.15;
 const THREE_WAY_CENTROID_W1 = 0.45;
 const THREE_WAY_CENTROID_W2 = 0.45;
 const THREE_WAY_CENTROID_W3 = 0.1;
-const THOMPSON_PRIOR_ALPHA = 0.5;
-const THOMPSON_PRIOR_BETA = 1.5;
-const THOMPSON_PRIOR_RECOVERY_RATE = 0.8;
 const DIRECTION_VALIDATION_TOLERANCE = 0.03;
+
+/** Mirrors config.outerStructuredOutputTimeoutMs; kept local so fixture mocks of config.js stay minimal. */
+function outerStructuredTimeoutMs(configured: number | undefined): number {
+  return (configured ?? 90_000) + 30_000;
+}
 
 /**
  * Gamma sampler (Marsaglia-Tsang 2000).
@@ -81,12 +84,20 @@ export class UserProfileManager {
   // (COLD_BUFFER_DEFAULT_KEY) only holds items from merges that ran without a profileId.
   private coldBuffers: Map<string, { preferences: any[]; patterns: any[]; workflows: any[] }>;
   private coldBufferPath: string;
+  /**
+   * Set when the last disk read of cold-buffer.json failed in a way that means
+   * "unknown on-disk state" (permission error, unparseable JSON, bad schema).
+   * A merge round must then fail closed instead of treating the data as empty
+   * and overwriting it. The constructor stays fail-safe: a non-critical cache
+   * read error must never crash the plugin import path, so it is only recorded.
+   */
+  private coldBufferLoadError: Error | null = null;
   private dedupCheckedCache: Set<string> = new Set();
 
   constructor() {
     this.dbPath = join(CONFIG.storagePath || "", USER_PROFILES_DB_NAME);
     this.coldBufferPath = join(CONFIG.storagePath || "", "cold-buffer.json");
-    this.coldBuffers = this.loadColdBuffers();
+    this.coldBuffers = this.loadColdBuffersFailSafe();
   }
 
   reset(): void {
@@ -94,6 +105,10 @@ export class UserProfileManager {
     this.initPromise = null;
     this.dbPath = join(CONFIG.storagePath || "", USER_PROFILES_DB_NAME);
     this.coldBufferPath = join(CONFIG.storagePath || "", "cold-buffer.json");
+    // The new storage starts from its own on-disk snapshot. Keeping the old
+    // map would resurrect the previous storage's buckets on the next save.
+    this.coldBuffers = this.loadColdBuffersFailSafe();
+    this.coldBufferLoadError = null;
   }
 
   private async initialize(): Promise<void> {
@@ -104,7 +119,13 @@ export class UserProfileManager {
     this.initPromise = (async () => {
       try {
         this.dbPath = join(CONFIG.storagePath || "", USER_PROFILES_DB_NAME);
-        this.coldBufferPath = join(CONFIG.storagePath || "", "cold-buffer.json");
+        const newColdBufferPath = join(CONFIG.storagePath || "", "cold-buffer.json");
+        if (newColdBufferPath !== this.coldBufferPath) {
+          // storagePath changed since construction — do not keep draining or
+          // saving the previous storage's buckets.
+          this.coldBufferPath = newColdBufferPath;
+          this.coldBuffers = this.loadColdBuffersFailSafe();
+        }
         this.db = await tursoConnectionManager.getConnection(this.dbPath);
         await this.initDatabase();
       } catch (error) {
@@ -136,6 +157,153 @@ export class UserProfileManager {
     return { preferences: [], patterns: [], workflows: [] };
   }
 
+  /**
+   * Fail-safe wrapper for the constructor / reset() path. A non-critical cache
+   * read error must not crash plugin import, so the error is recorded and an
+   * empty map is returned; the next merge round then fails closed.
+   */
+  private loadColdBuffersFailSafe(): Map<
+    string,
+    { preferences: any[]; patterns: any[]; workflows: any[] }
+  > {
+    try {
+      return this.loadColdBuffers();
+    } catch (e) {
+      this.coldBufferLoadError = e instanceof Error ? e : new Error(String(e));
+      return new Map();
+    }
+  }
+
+  /**
+   * Reads the complete cold-buffer snapshot from disk, strictly.
+   *
+   * A missing file (ENOENT) legitimately means "empty snapshot". Any other
+   * failure (permissions, unparseable JSON, malformed schema) means the
+   * on-disk state is unknown and MUST be thrown to the caller — treating it
+   * as empty would persist an empty snapshot over data we never read.
+   */
+  private loadColdBuffers(): Map<
+    string,
+    { preferences: any[]; patterns: any[]; workflows: any[] }
+  > {
+    const map = new Map<string, { preferences: any[]; patterns: any[]; workflows: any[] }>();
+    let raw: string;
+    try {
+      raw = readFileSync(this.coldBufferPath, "utf-8");
+    } catch (e: any) {
+      if (e?.code === "ENOENT") return map;
+      throw new Error(`profile cold buffer: unreadable (${this.coldBufferPath}): ${String(e)}`, {
+        cause: e,
+      });
+    }
+    let data: any;
+    try {
+      data = JSON.parse(raw);
+    } catch (e) {
+      throw new Error(
+        `profile cold buffer: corrupt JSON, refusing to overwrite (${this.coldBufferPath}): ${String(e)}`,
+        { cause: e }
+      );
+    }
+
+    if (data === null || typeof data !== "object" || Array.isArray(data)) {
+      throw new Error(
+        `profile cold buffer: unexpected schema, refusing to overwrite (${this.coldBufferPath})`
+      );
+    }
+
+    // Explicit legacy detection: the flat format is exactly the three category
+    // keys (each an array, at least one present) and nothing else. Anything
+    // else containing those keys is an unknown shape, not "legacy".
+    const legacyKeys = ["preferences", "patterns", "workflows"];
+    const presentLegacyKeys = legacyKeys.filter((k) => k in data);
+    if (presentLegacyKeys.length > 0) {
+      const onlyLegacyKeys = Object.keys(data).every((k) => legacyKeys.includes(k));
+      const allArrays = legacyKeys.every((k) => !(k in data) || Array.isArray(data[k]));
+      if (onlyLegacyKeys && allArrays) {
+        // Legacy flat format ({ preferences, patterns, workflows }) is
+        // cross-user contaminated and cannot be attributed to a profile, so
+        // it is dropped rather than replayed. This is the documented
+        // migration path, not a silent data loss: the format predates
+        // per-profile buckets.
+        log("profile cold buffer: dropping legacy unattributed buffer", {
+          keys: presentLegacyKeys,
+        });
+        return map;
+      }
+      throw new Error(
+        `profile cold buffer: legacy keys with unknown shape, refusing to overwrite (${this.coldBufferPath})`
+      );
+    }
+
+    // Per-profile buckets: every key must be a bucket whose category arrays
+    // hold real items. An invalid entry means the on-disk state is unknown —
+    // coercing it to [] would persist "known empty" over data we never read.
+    let loaded = 0;
+    for (const [pid, v] of Object.entries<any>(data)) {
+      if (v === null || typeof v !== "object" || Array.isArray(v)) {
+        throw new Error(
+          `profile cold buffer: bucket "${pid}" is not an object, refusing to overwrite (${this.coldBufferPath})`
+        );
+      }
+      const bucket: { preferences: any[]; patterns: any[]; workflows: any[] } = {
+        preferences: [],
+        patterns: [],
+        workflows: [],
+      };
+      for (const category of ["preferences", "patterns", "workflows"] as const) {
+        const items = v[category];
+        if (items === undefined) continue;
+        if (!Array.isArray(items)) {
+          throw new Error(
+            `profile cold buffer: bucket "${pid}.${category}" is not an array, refusing to overwrite (${this.coldBufferPath})`
+          );
+        }
+        for (const item of items) {
+          if (item === null || typeof item !== "object" || Array.isArray(item)) {
+            throw new Error(
+              `profile cold buffer: bucket "${pid}.${category}" holds a non-object item, refusing to overwrite (${this.coldBufferPath})`
+            );
+          }
+          if (typeof item.description !== "string") {
+            throw new Error(
+              `profile cold buffer: bucket "${pid}.${category}" holds an item without a string description, refusing to overwrite (${this.coldBufferPath})`
+            );
+          }
+        }
+        bucket[category] = items;
+      }
+      map.set(pid, bucket);
+      loaded++;
+    }
+    if (loaded > 0) {
+      log("profile cold buffer: loaded from disk", { profiles: loaded });
+    }
+    return map;
+  }
+
+  /**
+   * Starts a merge round from the freshest complete on-disk snapshot.
+   *
+   * Cooperative learners take the learning lock, then re-read the snapshot at
+   * the start of every merge round, so a peer's persisted buckets are never
+   * clobbered by a stale in-memory map (mtime comparison cannot be trusted:
+   * same-mtime writes and clock rollback both hide peer updates). The loaded
+   * map is fixed for the whole round: every buffer mutation and save in this
+   * round goes through the same reference, so pending unsaved increments are
+   * never dropped by a mid-round reference swap.
+   */
+  private beginColdBufferRound(): void {
+    try {
+      this.coldBuffers = this.loadColdBuffers();
+      this.coldBufferLoadError = null;
+    } catch (e) {
+      // Fail closed: the on-disk state is unknown, so no mutation may proceed.
+      this.coldBufferLoadError = e instanceof Error ? e : new Error(String(e));
+      throw this.coldBufferLoadError;
+    }
+  }
+
   private getColdBuffer(profileId?: string): {
     preferences: any[];
     patterns: any[];
@@ -150,105 +318,67 @@ export class UserProfileManager {
     return buf;
   }
 
-  private loadColdBuffers(): Map<
-    string,
-    { preferences: any[]; patterns: any[]; workflows: any[] }
-  > {
-    const map = new Map<string, { preferences: any[]; patterns: any[]; workflows: any[] }>();
-    try {
-      if (existsSync(this.coldBufferPath)) {
-        const raw = readFileSync(this.coldBufferPath, "utf-8");
-        const data = JSON.parse(raw);
-        // Legacy flat format ({ preferences, patterns, workflows }) is cross-user
-        // contaminated and cannot be attributed to a profile, so it is dropped rather
-        // than replayed. New format is keyed by profileId.
-        const isLegacyFlat =
-          data &&
-          typeof data === "object" &&
-          !Array.isArray(data) &&
-          ("preferences" in data || "patterns" in data || "workflows" in data);
-        if (data && typeof data === "object" && !Array.isArray(data) && !isLegacyFlat) {
-          let loaded = 0;
-          for (const [pid, v] of Object.entries<any>(data)) {
-            map.set(pid, {
-              preferences: Array.isArray(v?.preferences) ? v.preferences : [],
-              patterns: Array.isArray(v?.patterns) ? v.patterns : [],
-              workflows: Array.isArray(v?.workflows) ? v.workflows : [],
-            });
-            loaded++;
-          }
-          if (loaded > 0) {
-            log("profile cold buffer: loaded from disk", { profiles: loaded });
-          }
-        } else if (isLegacyFlat) {
-          log("profile cold buffer: dropping legacy unattributed buffer");
-        }
-      }
-    } catch {
-      // Corrupt or missing file — start with an empty buffer set.
-    }
-    return map;
-  }
-
+  /**
+   * Persists the current snapshot atomically: write a unique tmp file with
+   * O_EXCL (wx) and mode 0600, then rename over the target. Failures are
+   * thrown to the caller — swallowing them would let a round that never
+   * reached disk be reported as a successful learning merge.
+   */
   private saveColdBuffers(): void {
+    const obj: Record<string, { preferences: any[]; patterns: any[]; workflows: any[] }> = {};
+    for (const [pid, v] of this.coldBuffers.entries()) {
+      if (v.preferences.length || v.patterns.length || v.workflows.length) {
+        obj[pid] = v;
+      }
+    }
+    const tmpPath = `${this.coldBufferPath}.${randomUUID()}.tmp`;
+    let fd: number | undefined;
     try {
-      const obj: Record<string, { preferences: any[]; patterns: any[]; workflows: any[] }> = {};
-      for (const [pid, v] of this.coldBuffers.entries()) {
-        if (v.preferences.length || v.patterns.length || v.workflows.length) {
-          obj[pid] = v;
+      fd = openSync(tmpPath, "wx", 0o600);
+      // Byte-accurate payload: the string overload's third arg is a file
+      // position, not a string offset, and payload.length counts UTF-16
+      // units — both would corrupt multi-byte content on short writes.
+      const payload = Buffer.from(JSON.stringify(obj), "utf8");
+      let written = 0;
+      while (written < payload.length) {
+        // Buffer overload: (fd, buffer, offset, length) — append at the
+        // current position; n <= 0 means no forward progress is possible.
+        const n = writeSync(fd!, payload, written, payload.length - written);
+        if (!(n > 0)) {
+          throw new Error(`profile cold buffer: write stalled after ${written} bytes`);
+        }
+        written += n;
+      }
+      closeSync(fd);
+      fd = undefined;
+      renameSync(tmpPath, this.coldBufferPath);
+    } catch (e) {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          // best effort — the rename below is the cleanup that matters
         }
       }
-      writeFileSync(this.coldBufferPath, JSON.stringify(obj), "utf-8");
-    } catch {
-      // Silently ignore disk-full / permission errors.
+      try {
+        unlinkSync(tmpPath);
+      } catch {
+        // tmp file may never have been created
+      }
+      throw new Error(`profile cold buffer: save failed (${this.coldBufferPath}): ${String(e)}`, {
+        cause: e,
+      });
     }
   }
 
   private async initDatabase(): Promise<void> {
     const db = this.db!;
-    await db.batch([
-      {
-        sql: `
-          CREATE TABLE IF NOT EXISTS user_profiles (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL UNIQUE,
-            display_name TEXT NOT NULL,
-            user_name TEXT NOT NULL,
-            user_email TEXT NOT NULL,
-            profile_data TEXT NOT NULL,
-            version INTEGER NOT NULL DEFAULT 1,
-            created_at INTEGER NOT NULL,
-            last_analyzed_at INTEGER NOT NULL,
-            total_prompts_analyzed INTEGER NOT NULL DEFAULT 0,
-            is_active BOOLEAN NOT NULL DEFAULT 1
-          )
-        `,
-      },
-      {
-        sql: `
-          CREATE TABLE IF NOT EXISTS user_profile_changelogs (
-            id TEXT PRIMARY KEY,
-            profile_id TEXT NOT NULL,
-            version INTEGER NOT NULL,
-            change_type TEXT NOT NULL,
-            change_summary TEXT NOT NULL,
-            profile_data_snapshot TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            FOREIGN KEY (profile_id) REFERENCES user_profiles(id) ON DELETE CASCADE
-          )
-        `,
-      },
-      { sql: "CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id)" },
-      {
-        sql: "CREATE INDEX IF NOT EXISTS idx_user_profiles_is_active ON user_profiles(is_active)",
-      },
-      {
-        sql: "CREATE INDEX IF NOT EXISTS idx_user_profile_changelogs_profile_id ON user_profile_changelogs(profile_id)",
-      },
-      {
-        sql: "CREATE INDEX IF NOT EXISTS idx_user_profile_changelogs_version ON user_profile_changelogs(version DESC)",
-      },
-    ]);
+    const { applySchemaMigrations, USER_PROFILES_MIGRATIONS } =
+      await import("../turso/schema-migrations.js");
+    await applySchemaMigrations(db, USER_PROFILES_MIGRATIONS, {
+      dbPath: this.dbPath,
+      label: "user-profiles.db",
+    });
   }
 
   async getActiveProfile(userId: string): Promise<UserProfile | null> {
@@ -491,6 +621,10 @@ export class UserProfileManager {
   async deleteProfile(profileId: string): Promise<void> {
     const db = await this.ready();
     await db.run(`DELETE FROM user_profiles WHERE id = ?`, [profileId]);
+    // Re-read the current on-disk snapshot before deleting the bucket: a
+    // stale in-memory map (peer wrote meanwhile) would resurrect the deleted
+    // profile's bucket in the very save that is supposed to remove it.
+    this.beginColdBufferRound();
     if (this.coldBuffers.delete(profileId)) {
       this.saveColdBuffers();
     }
@@ -543,6 +677,13 @@ export class UserProfileManager {
     embedService?: EmbeddingService,
     profileId?: string
   ): Promise<UserProfileData> {
+    // Cross-process safety: cooperative learners hold the learning lock and
+    // start every round from the freshest complete on-disk snapshot. Fails
+    // closed when the on-disk state is unknown (see beginColdBufferRound).
+    // The snapshot is fixed for the whole round — getColdBuffer/saveColdBuffers
+    // never swap the map mid-round, so pending unsaved increments survive.
+    this.beginColdBufferRound();
+
     const merged: UserProfileData = {
       preferences: this.ensureArray(existing?.preferences),
       patterns: this.ensureArray(existing?.patterns),
@@ -709,7 +850,7 @@ export class UserProfileManager {
           const strongThreshold = sameCat ? sameCatStrong : crossCatStrong;
           const weakThreshold = sameCat ? sameCatWeak : crossCatWeak;
 
-          let band: "strong" | "weak" | null = null;
+          let band: "strong" | "weak";
           if (score >= strongThreshold) {
             band = "strong";
           } else if (score >= weakThreshold) {
@@ -1026,12 +1167,10 @@ export class UserProfileManager {
           const weakBeta = ((existingItem as any).weakBeta || 1) + (1 - top1Score);
           const effectiveAlpha = weakAlpha;
           const effectiveBeta = weakBeta;
-          let upgraded = false;
-          if (effectiveAlpha + effectiveBeta > 7) {
-            upgraded = effectiveAlpha / (effectiveAlpha + effectiveBeta) >= 0.45;
-          } else {
-            upgraded = sampleBeta(effectiveAlpha, effectiveBeta) >= 0.5;
-          }
+          const upgraded =
+            effectiveAlpha + effectiveBeta > 7
+              ? effectiveAlpha / (effectiveAlpha + effectiveBeta) >= 0.45
+              : sampleBeta(effectiveAlpha, effectiveBeta) >= 0.5;
           if (upgraded) {
             const oldFreq = (existingItem as any).frequency || 1;
             const centroid = (existingItem as any).centroid as number[];
@@ -1130,7 +1269,9 @@ export class UserProfileManager {
           });
           initCentroid = Array.from(emb);
           initAnchor = initCentroid;
-        } catch {}
+        } catch {
+          // keep the item without an embedding centroid
+        }
       }
 
       existing.push(this.initItem(newItem, itemType, initCentroid, initAnchor) as T);
@@ -1348,7 +1489,7 @@ export class UserProfileManager {
     this.syncConfidence(item);
   }
 
-  private async detectConflicts(items: any[], itemType: string, profileId: string): Promise<void> {
+  private async detectConflicts(items: any[], itemType: string, _profileId: string): Promise<void> {
     const candidates: { a: any; b: any; cos: number }[] = [];
     const limit = items.length;
     for (let i = 0; i < limit; i++) {
@@ -1435,6 +1576,7 @@ Answer JSON only: { "duplicate": true|false, "reason": "one sentence explanation
               client: v2Client,
               providerID: CONFIG.opencodeProvider,
               modelID: CONFIG.opencodeModel,
+              ...(CONFIG.opencodeVariant ? { variant: CONFIG.opencodeVariant } : {}),
               systemPrompt: "You are a semantic duplicate detector. Output valid JSON.",
               userPrompt: prompt,
               schema: z.object({ duplicate: z.boolean(), reason: z.string() }),
@@ -1635,6 +1777,7 @@ Answer JSON only: { "conflict": true|false, "reason": "one sentence explanation"
               client: v2Client,
               providerID: CONFIG.opencodeProvider,
               modelID: CONFIG.opencodeModel,
+              ...(CONFIG.opencodeVariant ? { variant: CONFIG.opencodeVariant } : {}),
               systemPrompt: "You are a preference contradiction detector. Output valid JSON.",
               userPrompt: prompt,
               schema: z.object({ conflict: z.boolean(), reason: z.string() }),
@@ -1899,12 +2042,16 @@ Generate a concise, abstract description of the user's general behavioral tenden
         client: v2Client,
         providerID: CONFIG.opencodeProvider!,
         modelID: CONFIG.opencodeModel!,
+        ...(CONFIG.opencodeVariant ? { variant: CONFIG.opencodeVariant } : {}),
         systemPrompt,
         userPrompt,
         schema,
       }),
       new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("evolve description timeout")), 120000)
+        setTimeout(
+          () => reject(new Error("evolve description timeout")),
+          outerStructuredTimeoutMs(CONFIG.opencodeTimeoutMs)
+        )
       ),
     ]);
 

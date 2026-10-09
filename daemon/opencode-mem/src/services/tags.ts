@@ -78,7 +78,9 @@ function resolveTrustedWindowsShell(untrustedRoot: string): string | null {
       accessSync(path, constants.X_OK);
       const candidate = canonicalPath(path);
       if (!isPathInside(untrustedRoot, candidate)) return candidate;
-    } catch {}
+    } catch {
+      // ignore unreadable or untrusted PATH entries
+    }
   }
   return null;
 }
@@ -105,7 +107,9 @@ function resolveTrustedGitCommand(directory: string): GitCommand | null {
 
         const shell = resolveTrustedWindowsShell(untrustedRoot);
         if (shell) return { executable, shell };
-      } catch {}
+      } catch {
+        // ignore unreadable or untrusted PATH entries
+      }
     }
   }
 
@@ -122,7 +126,7 @@ function runGit(args: string[], directory: string = process.cwd()): string | nul
       cwd: directory,
       stdio: ["ignore", "pipe", "ignore"],
       shell: gitCommand.shell,
-      windowsHide: true, // kimi-mem 补丁
+      windowsHide: true,
     }).trim();
     return output || null;
   } catch {

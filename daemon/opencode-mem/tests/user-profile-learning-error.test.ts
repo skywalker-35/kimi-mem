@@ -5,10 +5,7 @@ import { join } from "node:path";
 
 const tempDirs: string[] = [];
 
-const learningUrl = new URL(
-  "../src/services/user-memory-learning.js",
-  import.meta.url
-).href;
+const learningUrl = new URL("../src/services/user-memory-learning.js", import.meta.url).href;
 const configUrl = new URL("../src/config.js", import.meta.url).href;
 const tagsUrl = new URL("../src/services/tags.js", import.meta.url).href;
 const promptManagerUrl = new URL(
@@ -23,10 +20,8 @@ const opencodeProviderLoaderUrl = new URL(
   "../src/services/ai/opencode-provider-loader.js",
   import.meta.url
 ).href;
-const profileLlmClientUrl = new URL(
-  "../src/services/ai/profile-llm-client.js",
-  import.meta.url
-).href;
+const profileLlmClientUrl = new URL("../src/services/ai/profile-llm-client.js", import.meta.url)
+  .href;
 const loggerUrl = new URL("../src/services/logger.js", import.meta.url).href;
 
 function runProviderFailureScenario() {
@@ -55,6 +50,12 @@ mock.module(${JSON.stringify(configUrl)}, () => ({
     opencodeProvider: "opencode-go",
     opencodeModel: "deepseek-v4-flash",
     showUserProfileToasts: false,
+    // The learning service now takes the cross-process lock before analysis.
+    // Without a storagePath the lock would coordinate through the process cwd
+    // (old FS lock) or fail to place its coordination DB (Turso lock).
+    // A temp dir keeps this scenario hermetic; the error assertions below are
+    // unchanged.
+    storagePath: ${JSON.stringify(dir)},
   },
 }));
 
@@ -148,8 +149,6 @@ describe("user profile learning error propagation (#265)", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.parsed?.error).toContain("Thinking mode does not support");
-    expect(result.parsed?.error).not.toContain(
-      "External API not configured"
-    );
+    expect(result.parsed?.error).not.toContain("External API not configured");
   });
 });

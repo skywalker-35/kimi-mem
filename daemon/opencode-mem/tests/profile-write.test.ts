@@ -33,7 +33,9 @@ describe("UserProfileManager – explicit preference writes", () => {
     await new Promise((r) => setTimeout(r, 100));
     try {
       rmSync(tmpDir, { recursive: true, force: true });
-    } catch {}
+    } catch {
+      // ignore leftover test files
+    }
   });
 
   it("creates a profile with an explicit preference when none exists", async () => {

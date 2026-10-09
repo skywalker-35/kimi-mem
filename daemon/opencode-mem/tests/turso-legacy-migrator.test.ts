@@ -25,7 +25,6 @@ describe("turso legacy migrator", () => {
   ): Promise<string> {
     const dbPath = join(dir, fileName);
     const db = new Database(dbPath);
-    const dims = memories[0]?.vector.length ?? 768;
 
     db.exec(`CREATE TABLE memories (
           id TEXT PRIMARY KEY,
@@ -81,6 +80,8 @@ describe("turso legacy migrator", () => {
     const { CONFIG } = await import("../src/config.js");
     CONFIG.storagePath = baseDir;
     CONFIG.embeddingDimensions = 768;
+    CONFIG.databaseEncryptionEnabled = false;
+    CONFIG.databaseEncryptionKey = undefined;
 
     const { runLegacyTursoMigration } = await import("../src/services/turso/legacy-migrator.js");
     await runLegacyTursoMigration();
@@ -124,6 +125,8 @@ describe("turso legacy migrator", () => {
     const { CONFIG } = await import("../src/config.js");
     CONFIG.storagePath = baseDir;
     CONFIG.embeddingDimensions = 768;
+    CONFIG.databaseEncryptionEnabled = false;
+    CONFIG.databaseEncryptionKey = undefined;
 
     const { tursoConnectionManager } = await import("../src/services/turso/connection-manager.js");
     const { tursoShardManager } = await import("../src/services/turso/shard-manager.js");
@@ -226,6 +229,8 @@ describe("turso legacy migrator", () => {
     const { CONFIG } = await import("../src/config.js");
     CONFIG.storagePath = baseDir;
     CONFIG.embeddingDimensions = 768;
+    CONFIG.databaseEncryptionEnabled = false;
+    CONFIG.databaseEncryptionKey = undefined;
 
     const { runLegacyTursoMigration } = await import("../src/services/turso/legacy-migrator.js");
     await expect(runLegacyTursoMigration()).rejects.toThrow(/unreadable vectors/);
@@ -269,6 +274,8 @@ describe("turso legacy migrator", () => {
     const { CONFIG } = await import("../src/config.js");
     CONFIG.storagePath = baseDir;
     CONFIG.embeddingDimensions = 768;
+    CONFIG.databaseEncryptionEnabled = false;
+    CONFIG.databaseEncryptionKey = undefined;
 
     const { runLegacyTursoMigration } = await import("../src/services/turso/legacy-migrator.js");
     await runLegacyTursoMigration();
@@ -278,9 +285,13 @@ describe("turso legacy migrator", () => {
     const indexRow = await db.get(
       `SELECT name FROM sqlite_master WHERE type='index' AND name='memories_vec_idx'`
     );
-    expect(indexRow).toBeTruthy();
+    expect(indexRow).toBeNull();
     const probe = await db.get(`SELECT vector_extract(vector) AS extracted FROM memories LIMIT 1`);
     expect(String(probe?.extracted || "").length).toBeGreaterThan(0);
+    const meta = await db.get(
+      `SELECT value FROM shard_metadata WHERE key = 'embedding_dimensions'`
+    );
+    expect(Number(meta?.value)).toBe(768);
   });
 
   migrationTest(

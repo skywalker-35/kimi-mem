@@ -117,7 +117,9 @@ export class LocalMemoryClient {
       const queryVector = await embeddingService.embedWithTimeout(query, { task: "query" });
       const resolved = resolveScopeValue(scope, containerTag);
       const shards = (
-        await Promise.all(resolved.map((ref) => tursoShardManager.getAllShards(ref.scope, ref.hash)))
+        await Promise.all(
+          resolved.map((ref) => tursoShardManager.getAllShards(ref.scope, ref.hash))
+        )
       ).flat();
 
       if (shards.length === 0) {
@@ -200,6 +202,9 @@ export class LocalMemoryClient {
           ...dynamicMetadata
         } = metadata || {};
 
+        const sessionId =
+          typeof dynamicMetadata.sessionID === "string" ? dynamicMetadata.sessionID : undefined;
+
         const record: MemoryRecord = {
           id,
           content,
@@ -216,6 +221,7 @@ export class LocalMemoryClient {
           projectPath,
           projectName,
           gitRepoUrl,
+          sessionId,
           metadata:
             Object.keys(dynamicMetadata).length > 0 ? JSON.stringify(dynamicMetadata) : undefined,
         };
@@ -269,7 +275,9 @@ export class LocalMemoryClient {
 
       const resolved = resolveScopeValue(scope, containerTag);
       const shards = (
-        await Promise.all(resolved.map((ref) => tursoShardManager.getAllShards(ref.scope, ref.hash)))
+        await Promise.all(
+          resolved.map((ref) => tursoShardManager.getAllShards(ref.scope, ref.hash))
+        )
       ).flat();
 
       if (shards.length === 0) {

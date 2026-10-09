@@ -21,32 +21,67 @@ const SUMMARY_REQUEST_OVERHEAD_BYTES = 1024;
 const SUMMARY_OUTPUT_RESERVE_BYTES = 16384;
 const SUMMARY_ANALYSIS_SUFFIX = `Analyze this conversation. If it contains technical work (code, bugs, features, decisions), create a concise summary and relevant tags. If it's non-technical (greetings, casual chat, incomplete requests), return type="skip" with empty summary.`;
 
-let isCaptureRunning = false;
+// Serializes captures across sessions. Replacing the old module-wide boolean
+// (which silently dropped any session whose idle fired while another capture
+// was in flight — a finished session then never got summarized), jobs now
+// queue behind the running one. The chain itself never rejects so one failed
+// job cannot poison the next; each caller still observes its own job's
+// actual outcome.
+let captureChain: Promise<void> = Promise.resolve();
+
+export interface PerformAutoCaptureOptions {
+  /**
+   * Skip this job if it has not started yet once the signal aborts (e.g. the
+   * plugin is disposing). In-flight captures are NOT cancelled: model
+   * requests were never cancellable and keep their original semantics.
+   */
+  signal?: AbortSignal;
+}
 
 export async function performAutoCapture(
   ctx: PluginInput,
   sessionID: string,
+  directory: string,
+  options: PerformAutoCaptureOptions = {}
+): Promise<void> {
+  const run = async () => {
+    if (options.signal?.aborted) return;
+    await runAutoCapture(ctx, sessionID, directory);
+  };
+
+  const next = captureChain.then(run, run);
+  // Keep the chain alive regardless of this job's outcome; `next` still
+  // rejects to the caller when their own job failed.
+  captureChain = next.catch(() => {});
+  return next;
+}
+
+/**
+ * Wait until every capture job that has already been enqueued finishes.
+ * Used by plugin dispose so `memoryClient.close()` does not race an
+ * in-flight capture that was intentionally left uncancellable.
+ */
+export function awaitCaptureDrain(): Promise<void> {
+  return captureChain;
+}
+
+async function runAutoCapture(
+  ctx: PluginInput,
+  sessionID: string,
   directory: string
 ): Promise<void> {
-  if (isCaptureRunning) return;
-  isCaptureRunning = true;
+  const prompts = await userPromptManager.getUncapturedPromptsForSession(sessionID);
+  if (prompts.length === 0) {
+    return;
+  }
 
-  try {
-    const prompts = await userPromptManager.getUncapturedPromptsForSession(sessionID);
-    if (prompts.length === 0) {
-      return;
-    }
+  if (!CONFIG.autoCaptureProviderStatus.ready) {
+    return;
+  }
 
-    if (!CONFIG.autoCaptureProviderStatus.ready) {
-      return;
-    }
-
-    const maxRetries = CONFIG.autoCaptureMaxRetries ?? 3;
-    for (const prompt of prompts) {
-      await capturePrompt(ctx, sessionID, directory, prompt, maxRetries);
-    }
-  } finally {
-    isCaptureRunning = false;
+  const maxRetries = CONFIG.autoCaptureMaxRetries ?? 3;
+  for (const prompt of prompts) {
+    await capturePrompt(ctx, sessionID, directory, prompt, maxRetries);
   }
 }
 
@@ -110,7 +145,7 @@ async function capturePrompt(
           summaryResult = await generateSummary(ctx, context, sessionID, prompt.content, prompt);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`Summary generation failed: ${message}`);
+          throw new Error(`Summary generation failed: ${message}`, { cause: error });
         }
 
         if (!summaryResult || summaryResult.type === "skip") {
@@ -494,7 +529,7 @@ async function generateSummary(
         log("opencodeProvider takes precedence over memoryModel for auto-capture");
       }
 
-      const { isProviderConnected, getV2Client, generateStructuredOutput } =
+      const { ensureProviderConnected, getV2Client, generateStructuredOutput } =
         await loadOpencodeProvider();
 
       // "inherit" resolves to the model opencode used for the captured prompt
@@ -512,7 +547,9 @@ async function generateSummary(
         modelID = prompt.modelId;
       }
 
-      if (!isProviderConnected(providerID)) {
+      // One refresh-on-miss before failing: user-config providers register
+      // seconds after plugin setup, so the init snapshot may lag the host.
+      if (!(await ensureProviderConnected(providerID))) {
         throw new Error(
           `opencode provider '${providerID}' is not connected. Check your opencode provider configuration.`
         );
@@ -564,6 +601,7 @@ CAPTURE if: code changed, bug fixed, feature added, decision made`;
         client: v2Client,
         providerID,
         modelID,
+        ...(CONFIG.opencodeVariant ? { variant: CONFIG.opencodeVariant } : {}),
         systemPrompt,
         userPrompt: aiPrompt,
         schema,

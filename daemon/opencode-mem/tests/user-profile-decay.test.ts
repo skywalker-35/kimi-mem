@@ -25,7 +25,9 @@ describe("user profile decay (#237)", () => {
     await new Promise((r) => setTimeout(r, 50));
     try {
       rmSync(tmpDir, { recursive: true, force: true });
-    } catch {}
+    } catch {
+      // ignore leftover test files
+    }
   });
 
   it("removes stale items below minEvidence after staleDays", async () => {
