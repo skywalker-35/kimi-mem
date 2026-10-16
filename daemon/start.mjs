@@ -37,20 +37,80 @@ if (!configMod.CONFIG.userEmailOverride) {
   }
 }
 
-await ensureTursoReady();
+// ── Turso 锁探测退避（方案 A）─────────────────────────────────────────────
+// opencode-mem 插件（v2.2x+ Turso 引擎）与本 daemon 共享 ~/.opencode-mem/data，
+// Windows 上 Turso 只允许单进程持有数据库所有权：谁先启动谁持锁，后到者初始化直接失败。
+// 策略：锁空闲 → 正常初始化；锁被占 → 后台轮询等待，期间：
+//   - WebServer(:5757) 暂不监听（未就绪语义与 README FAQ 的 ":5757 可访问" 判断一致）
+//   - sidecar capture(:port+11) 照常接收，请求进内存队列，拿到锁后按序 flush
+const RETRY_INTERVAL_MS = Number(process.env.KIMI_MEM_RETRY_MS ?? 30_000);
+const CAPTURE_QUEUE_MAX = 200;
 
-const server = await startWebServer({
-  port: Number(process.env.KIMI_MEM_PORT ?? 5757),
-  host: "127.0.0.1",
-  enabled: true,
-  auth: new WebAuth({
-    password: configMod.CONFIG.webServerAuthPassword,
-    username: configMod.CONFIG.webServerAuthUsername,
-  }),
-  apiToken: configMod.CONFIG.webServerApiToken,
-});
+let tursoReady = false;
+let serverRef = null; // shutdown 用；等待锁期间 WebServer 尚未启动
+const captureQueue = [];
 
-console.log(`[kimi-mem] daemon ready at ${server.getUrl()}`);
+async function tryAcquireTurso() {
+  try {
+    await ensureTursoReady();
+    tursoReady = true;
+    return true;
+  } catch (err) {
+    const brief = String(err?.message ?? err).split("\n")[0].slice(0, 160);
+    console.warn(`[kimi-mem] storage locked by another process: ${brief}`);
+    return false;
+  }
+}
+
+async function startWebServerWhenReady() {
+  serverRef = await startWebServer({
+    port: Number(process.env.KIMI_MEM_PORT ?? 5757),
+    host: "127.0.0.1",
+    enabled: true,
+    auth: new WebAuth({
+      password: configMod.CONFIG.webServerAuthPassword,
+      username: configMod.CONFIG.webServerAuthUsername,
+    }),
+    apiToken: configMod.CONFIG.webServerApiToken,
+  });
+  console.log(`[kimi-mem] daemon ready at ${serverRef.getUrl()}`);
+}
+
+async function flushCaptureQueue() {
+  while (captureQueue.length > 0) {
+    const job = captureQueue.shift();
+    try {
+      await runCapture(job);
+    } catch (err) {
+      console.warn(
+        `[kimi-mem] queued capture failed: ${String(err?.message ?? err).slice(0, 160)}`
+      );
+    }
+  }
+}
+
+// ensureTursoReady 内部有 isReady/initPromise 守卫且失败时重置，可安全反复调用
+async function pollUntilTursoReady() {
+  while (!tursoReady) {
+    await new Promise((r) => setTimeout(r, RETRY_INTERVAL_MS));
+    if (await tryAcquireTurso()) {
+      console.log(
+        "[kimi-mem] storage lock acquired; starting WebServer and flushing queued captures"
+      );
+      await startWebServerWhenReady();
+      await flushCaptureQueue();
+    }
+  }
+}
+
+if (await tryAcquireTurso()) {
+  await startWebServerWhenReady();
+} else {
+  console.warn(
+    `[kimi-mem] entering retry loop every ${RETRY_INTERVAL_MS / 1000}s until the lock holder exits...`
+  );
+  pollUntilTursoReady(); // 后台轮询，不阻塞 sidecar 启动
+}
 
 // sidecar：接收 hooks 发来的捕获请求，在 daemon 进程内执行（隐藏后台，无窗口）
 // POST /capture {session_id, cwd, event}，需要 x-opencode-mem-token 头
@@ -80,7 +140,15 @@ const sidecar = http.createServer((req, res) => {
     req.on("end", () => {
       try {
         const { session_id, cwd, event } = JSON.parse(body);
-        if (session_id && cwd) runCapture({ sessionId: session_id, cwd, event });
+        if (!session_id || !cwd) throw new Error("missing session_id/cwd");
+        if (!tursoReady) {
+          // 引擎等待锁中：入队暂存，拿到锁后按序 flush（超限丢最旧）
+          if (captureQueue.length >= CAPTURE_QUEUE_MAX) captureQueue.shift();
+          captureQueue.push({ sessionId: session_id, cwd, event });
+          res.writeHead(202).end('{"accepted":true,"queued":true}');
+          return;
+        }
+        runCapture({ sessionId: session_id, cwd, event });
         res.writeHead(202).end('{"accepted":true}');
       } catch {
         res.writeHead(400).end('{"error":"bad payload"}');
@@ -89,7 +157,15 @@ const sidecar = http.createServer((req, res) => {
     return;
   }
   if (req.method === "GET" && req.url === "/health") {
-    res.writeHead(200).end('{"status":"ok"}');
+    res
+      .writeHead(200)
+      .end(
+        JSON.stringify({
+          status: "ok",
+          tursoReady,
+          queued: captureQueue.length,
+        })
+      );
     return;
   }
   res.writeHead(404).end();
@@ -104,7 +180,7 @@ setInterval(() => {}, 1 << 30);
 const shutdown = async () => {
   try {
     sidecar.close();
-    await server.stop();
+    await serverRef?.stop?.();
   } finally {
     process.exit(0);
   }

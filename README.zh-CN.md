@@ -142,8 +142,8 @@ cd web && bun install && bun run build   # Web UI 产物输出到 ../dist/web
 如果你同时是 OpenCode 用户、已经装了 opencode-mem：
 
 - **数据库完全共享**：kimi-mem 刻意复用 opencode-mem 的默认存储（`~/.opencode-mem/data`）、配置文件（`~/.config/opencode/opencode-mem.jsonc`）、项目 tag 算法和认证 token。同一个项目在两边产生的记忆落在同一个 shard——OpenCode 里存的，Kimi Code 里能注入，反之亦然。装 kimi-mem 后历史记忆立刻可见，零迁移
-- **进程相互独立**：两边 daemon 各开各的端口（opencode-mem 默认 4747，kimi-mem 默认 5757），互不干扰，可以只装其中一个，也可以同时跑
-- **同时捕获会冲突吗**：两个 daemon 写同一个 SQLite/libSQL 本地库，理论上并发写存在瞬时锁竞争，但实际上——① 两边只会捕获各自工具的会话（opencode-mem 抓 OpenCode 会话，kimi-mem 抓 Kimi Code 会话），不会写入重复内容；② 写入都是短事务，撞上同一时刻的概率极低；③ 即便撞上，SQLite 事务是原子的，不会损坏数据，kimi-mem 侧还有捕获失败自动重试兜底。实测双 daemon 长期共存无异常
+- **存储锁互斥，排队式共存（opencode-mem 2.2x+）**：从 Turso 引擎（opencode-mem 2.2x+）起，Windows 上共享库只允许一个进程持有——谁先启动谁持锁，后到者的引擎初始化直接失败。kimi-mem daemon 对此做了优雅处理：若锁被占（opencode-mem 正在运行），进入重试循环（默认 30s，可用 `KIMI_MEM_RETRY_MS` 调整），capture sidecar 照常接收请求存入内存队列（上限 200 条，超限丢最旧），锁释放后自动拿锁并清空队列。拿到锁之前 Web UI（:5757）不上线。代价：kimi-mem 等待期间 Kimi Code 的记忆注入不可用（已排队的捕获不会丢）；kimi-mem 持锁期间 opencode-mem 初始化失败直到 daemon 退出——所以更在乎 opencode-mem 的话，先启动 OpenCode
+- **同时捕获会冲突吗**：两边只会捕获各自工具的会话（opencode-mem 抓 OpenCode 会话，kimi-mem 抓 Kimi Code 会话），不会写入重复内容；写入都是短事务，SQLite 事务原子，不会损坏数据，kimi-mem 侧还有捕获失败自动重试兜底
 - **版本一致性提醒**：共享存储意味着两边最好跟随相近的上游版本。若未来 opencode-mem 升级改了存储格式或 tag 算法，请等 kimi-mem 同步升级后再混用（vendor 版本见 `daemon/opencode-mem/package.json`，当前基于上游 `v2.25.0`（`d1d0eb0`））
 
 ## 常见问题
